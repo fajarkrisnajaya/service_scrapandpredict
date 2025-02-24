@@ -48,7 +48,7 @@ def fetch_reviews():
                 'co.id.bankbsi.superapp',
                 lang='id',
                 country='id',
-                count=1000,
+                count=100,
                 sort=Sort.NEWEST,
                 filter_score_with=None
             )
