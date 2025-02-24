@@ -1,0 +1,6 @@
+pandas
+flask
+google-play-scraper
+nltk
+Sastrawi
+joblib
