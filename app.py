@@ -2,13 +2,19 @@ import pandas as pd
 import re
 import string
 import joblib
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from google_play_scraper import Sort, reviews
 from nltk.corpus import stopwords
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
+import psycopg2
+from psycopg2.extras import execute_values
+import logging
 
 # Initialize Flask App
 app = Flask(__name__)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 class SentimentPredictor:
     def __init__(self, vectorizer_path, model_path):
@@ -48,20 +54,48 @@ def fetch_reviews():
                 'co.id.bankbsi.superapp',
                 lang='id',
                 country='id',
-                count=100,
+                count=5000,
                 sort=Sort.NEWEST,
                 filter_score_with=None
             )
 
             df = pd.DataFrame(result)
-            df = df[['reviewId', 'userName', 'content', 'score', 'at', 'thumbsUpCount']]
-            df['predicted_sentiment'] = predictor.predict(df['content'].astype(str))
+            df = df[['reviewId', 'userName', 'content', 'score', 'at', 'thumbsUpCount', 'appVersion']]
+            df['content'] = df['content'].fillna('')  # Handle missing values
+            df['sentiment'] = predictor.predict(df['content'].astype(str))
 
-            # Save as CSV
-            csv_filename = "reviews_sentiment.csv"
-            df.to_csv(csv_filename, index=False)
+            # Convert DataFrame to JSON
+            reviews_json = df.to_json(orient='records')
 
-            return send_file(csv_filename, mimetype='text/csv', as_attachment=True)
+            # Append to PostgreSQL database
+            conn = psycopg2.connect(
+                host="104.154.175.45",
+                database="multimatics-backend",
+                user="tukam",
+                password="tukam"  # Replace with your actual password
+            )
+            cursor = conn.cursor()
+
+            # Check for existing reviews and filter out duplicates
+            existing_review_ids_query = 'SELECT "reviewId" FROM byond_review WHERE "reviewId" = ANY(%s)'
+            cursor.execute(existing_review_ids_query, (df['reviewId'].tolist(),))
+            existing_review_ids = {row[0] for row in cursor.fetchall()}
+
+            new_reviews = df[~df['reviewId'].isin(existing_review_ids)]
+
+            if not new_reviews.empty:
+                insert_query = """
+                INSERT INTO byond_review ("reviewId", "userName", "content", "score", "at", "thumbsUpCount", "appVersion", "sentiment")
+                VALUES %s
+                """
+                execute_values(cursor, insert_query, new_reviews[['reviewId', 'userName', 'content', 'score', 'at', 'thumbsUpCount', 'appVersion', 'sentiment']].values.tolist())
+                conn.commit()
+
+
+            cursor.close()
+            conn.close()
+
+            return jsonify({'number of reviews inserted': len(new_reviews)})
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
